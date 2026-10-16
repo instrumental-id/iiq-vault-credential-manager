@@ -88,6 +88,83 @@ public class CredentialManagerTests {
                     "Password should match expected value");
         }
 
+        @Test
+        @DisplayName("file retrieval throws when the file does not exist")
+        void testFileRetrievalMissingFileThrows() {
+            var config = new Configuration();
+            var manager = new VaultCredentialManager(config, new MockVaultClient());
+
+            var request = new Request(config);
+            request.setAttributeName("/nonexistent/path/vault-test-missing.txt");
+            request.put(Constants.TYPE, Constants.VAULT_TYPE_FILE);
+
+            var e = assertThrows(VaultCredentialManagerException.class, () -> manager.getCredential(request),
+                    "A missing file must not produce a null credential");
+            assertTrue(e.getMessage().contains("404"), "Message should include the status");
+            assertTrue(e.getMessage().contains("not found"), "Message should include the file error");
+        }
+
+        @Test
+        @DisplayName("file retrieval throws when the requested field is missing")
+        void testFileRetrievalMissingFieldThrows() throws IOException {
+            var config = new Configuration();
+            var manager = new VaultCredentialManager(config, new MockVaultClient());
+
+            File tempFile = File.createTempFile("vault-test-", ".json");
+            tempFile.deleteOnExit();
+            Files.writeString(tempFile.toPath(), "{\"username\": \"admin\"}");
+
+            var request = new Request(config);
+            request.setAttributeName(tempFile.getAbsolutePath());
+            request.put(Constants.TYPE, Constants.VAULT_TYPE_FILE);
+            request.put(Constants.KEY, "password");
+
+            var e = assertThrows(VaultCredentialManagerException.class, () -> manager.getCredential(request),
+                    "A missing field must not produce a null credential");
+            assertTrue(e.getMessage().contains("404"), "Message should include the status");
+            assertTrue(e.getMessage().contains("'password'"), "Message should name the missing field");
+        }
+
+        @Test
+        @DisplayName("file retrieval throws when the file is not readable")
+        void testFileRetrievalUnreadableFileThrows() throws IOException {
+            var config = new Configuration();
+            var manager = new VaultCredentialManager(config, new MockVaultClient());
+
+            File tempFile = File.createTempFile("vault-test-", ".txt");
+            tempFile.deleteOnExit();
+            Files.writeString(tempFile.toPath(), "secret");
+            org.junit.jupiter.api.Assumptions.assumeTrue(tempFile.setReadable(false),
+                    "Cannot make file unreadable on this platform");
+            org.junit.jupiter.api.Assumptions.assumeFalse(Files.isReadable(tempFile.toPath()),
+                    "Running as a user that can read anything (e.g. root)");
+
+            var request = new Request(config);
+            request.setAttributeName(tempFile.getAbsolutePath());
+            request.put(Constants.TYPE, Constants.VAULT_TYPE_FILE);
+
+            var e = assertThrows(VaultCredentialManagerException.class, () -> manager.getCredential(request));
+            assertTrue(e.getMessage().contains("403"), "Message should include the status");
+        }
+
+        @Test
+        @DisplayName("vault retrieval throws when the secret lacks the requested field")
+        void testVaultRetrievalMissingFieldThrows() {
+            var config = new Configuration();
+            config.put(Constants.CONFIG_VAULT_URL, "https://vault.example.com");
+            config.put(Constants.CONFIG_TOKEN, "test-token");
+            var mockVaultClient = new MockVaultClient();
+            var manager = new VaultCredentialManager(config, mockVaultClient);
+
+            mockVaultClient.putSecret("kv/myapp/database", new HashMap<>(Map.of("username", "admin")));
+
+            var request = new Request(config);
+            request.setAttributeName("kv/myapp/database");
+            request.put(Constants.KEY, "password");
+
+            assertThrows(VaultCredentialManagerException.class, () -> manager.getCredential(request),
+                    "Vault errors should still surface as exceptions after the check moved to the manager");
+        }
     }
 
     /**

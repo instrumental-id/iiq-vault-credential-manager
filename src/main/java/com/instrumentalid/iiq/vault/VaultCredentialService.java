@@ -394,9 +394,6 @@ public class VaultCredentialService implements CredentialService {
             }
         }
 
-        if (response.getStatus() < 200 || response.getStatus() > 299) {
-            throw new VaultCredentialManagerException("Error response from Vault: status = " + response.getStatus() + ", body = " + response.getError());
-        }
         return response;
     }
 

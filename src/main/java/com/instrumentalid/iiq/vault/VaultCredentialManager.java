@@ -127,6 +127,12 @@ public class VaultCredentialManager implements CredentialManager {
 
             VaultResponse response = vaultService.readVaultResponse();
 
+            // Every CredentialService reports failures via status, so check it here for all of them
+            if (response.getStatus() < 200 || response.getStatus() > 299) {
+                throw new VaultCredentialManagerException("Error response from " + options.type + " source: status = "
+                        + response.getStatus() + ", body = " + response.getError());
+            }
+
             Map<String, String> responseMap = new HashMap<>();
             responseMap.put(options.path, response.getSecret());
             if (options.debug) {
