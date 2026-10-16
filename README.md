@@ -13,7 +13,7 @@ This project implements an IdentityIQ (IIQ) Credential Provider for retrieving c
 
 ## Building the Project
 
-The project uses Maven for building. A Maven wrapper is included so you don't need to install Maven separately.
+The project uses Maven for building. JDK 17 and higher are supported. A Maven wrapper is included so you don't need to install Maven separately.
 
 **IMPORTANT: You must add `identityiq.jar` and `pam-credential.jar` from your SailPoint IIQ package at `lib/sailpoint`. These are proprietary libraries that we cannot contribute to public source control.**
 
