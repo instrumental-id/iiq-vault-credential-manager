@@ -31,7 +31,7 @@
         <vault.client.key.path/>
 
         <version.log4j>2.25.3</version.log4j>
-        <version.vault-driver>6.2.1</version.vault-driver>
+        <version.vault-driver>6.2.3</version.vault-driver>
         <version.junit5>5.14.1</version.junit5>
         <version.maven-surefire>3.5.2</version.maven-surefire>
     </properties>

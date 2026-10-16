@@ -6,7 +6,10 @@ import org.junit.jupiter.api.Test;
 
 import io.github.jopenlibs.vault.VaultException;
 
+import com.sun.net.httpserver.HttpServer;
+
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.time.Duration;
@@ -59,7 +62,7 @@ public class DefaultVaultClientTests {
     @Test
     @DisplayName("the configured token is used for reads")
     void testTokenUsedForReads() throws Exception {
-        assertEquals("tok", client(null).buildConfig(true).getToken());
+        assertEquals("tok", new String(client(null).buildConfig(true).getToken()));
     }
 
     @Test
@@ -118,6 +121,39 @@ public class DefaultVaultClientTests {
                     socket.close();
                 }
             }
+        }
+    }
+
+    /**
+     * VaultCredentialService only re-logs in when read() returns a 401/403 response. This pins the
+     * driver behavior that depends on: 4xx comes back as a response, only 412 and 5xx throw. If a
+     * driver upgrade starts throwing for 401/403, the re-login path silently goes dead, so fail here.
+     */
+    @Test
+    @DisplayName("the driver returns 401/403 as responses rather than throwing; 5xx throws")
+    void testDriverStatusHandlingMatchesRetryAssumptions() throws Exception {
+        var server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        server.createContext("/", exchange -> {
+            var path = exchange.getRequestURI().getPath();
+            int status = Integer.parseInt(path.substring(path.lastIndexOf('/') + 1));
+            var body = "{\"errors\":[\"permission denied\"]}".getBytes();
+            exchange.sendResponseHeaders(status, body.length);
+            exchange.getResponseBody().write(body);
+            exchange.close();
+        });
+        server.start();
+        try {
+            var client = new DefaultVaultClient("http://127.0.0.1:" + server.getAddress().getPort(), "tok",
+                    new SslConfig().build(), 2, null, 2, 5);
+
+            for (int status : new int[]{401, 403}) {
+                var response = client.read("secret/data/" + status);
+                assertEquals(status, response.getRestResponse().getStatus());
+            }
+            var thrown = assertThrows(VaultException.class, () -> client.read("secret/data/500"));
+            assertEquals(500, thrown.getHttpStatusCode());
+        } finally {
+            server.stop(0);
         }
     }
 }
