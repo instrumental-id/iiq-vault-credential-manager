@@ -98,6 +98,8 @@ These arguments tell the Credential Provider how to connect to Vault. Some of th
 **Connection Parameters:**
 - `url` - Vault server URL
 - `namespace` - Vault Enterprise / HCP Vault namespace (optional, e.g. `admin` or `admin/team-a`). Leave unset for the root namespace. HCP Vault clusters are typically used through the `admin` namespace. The namespace is sent on both login and secret reads, so your AppRole (or other auth method) and the secrets must be in that namespace. A token from one namespace can't read secrets in another, so use a separate Credential Source for each namespace.
+- `openTimeoutSeconds` - Seconds to wait when connecting to Vault (optional, defaults to `10`)
+- `readTimeoutSeconds` - Seconds to wait for Vault to respond (optional, defaults to `30`). Keeps an unresponsive Vault from tying up IIQ threads.
 
 **SSL/TLS Parameters:**
 - `sslVerify` - Enable/disable SSL verification (default: true)

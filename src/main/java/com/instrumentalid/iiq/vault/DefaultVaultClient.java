@@ -21,6 +21,17 @@ public class DefaultVaultClient implements VaultClient {
     private static final int DEFAULT_ENGINE_VERSION = 2;
 
     /**
+     * Default seconds to wait for a connection to Vault. Without an explicit value a hung Vault
+     * can hold an IIQ worker thread indefinitely.
+     */
+    public static final int DEFAULT_OPEN_TIMEOUT_SECONDS = 10;
+
+    /**
+     * Default seconds to wait for Vault to respond once connected
+     */
+    public static final int DEFAULT_READ_TIMEOUT_SECONDS = 30;
+
+    /**
      * The Vault engine version
      */
     private final int engineVersion;
@@ -46,6 +57,14 @@ public class DefaultVaultClient implements VaultClient {
      * The Vault URL
      */
     private final String vaultUrl;
+    /**
+     * Seconds to wait when connecting to Vault
+     */
+    private final int openTimeoutSeconds;
+    /**
+     * Seconds to wait for a response from Vault
+     */
+    private final int readTimeoutSeconds;
 
     /**
      * Constructs a new DefaultVaultClient
@@ -67,6 +86,29 @@ public class DefaultVaultClient implements VaultClient {
      * @param namespace The Vault namespace to use for every request (optional; null or empty means root)
      */
     public DefaultVaultClient(String vaultUrl, String token, SslConfig sslConfig, int engineVersion, String namespace) {
+        this(vaultUrl, token, sslConfig, engineVersion, namespace,
+                DEFAULT_OPEN_TIMEOUT_SECONDS, DEFAULT_READ_TIMEOUT_SECONDS);
+    }
+
+    /**
+     * Constructs a new DefaultVaultClient
+     * @param vaultUrl The URL of the Vault instance
+     * @param token The token to use for authentication (optional)
+     * @param sslConfig The SSL configuration
+     * @param engineVersion The Vault engine version
+     * @param namespace The Vault namespace to use for every request (optional; null or empty means root)
+     * @param openTimeoutSeconds Seconds to wait when connecting; must be positive
+     * @param readTimeoutSeconds Seconds to wait for a response; must be positive
+     * @throws IllegalArgumentException If either timeout is not positive
+     */
+    public DefaultVaultClient(String vaultUrl, String token, SslConfig sslConfig, int engineVersion, String namespace,
+                              int openTimeoutSeconds, int readTimeoutSeconds) {
+        if (openTimeoutSeconds <= 0 || readTimeoutSeconds <= 0) {
+            throw new IllegalArgumentException("Vault timeouts must be positive (open=" + openTimeoutSeconds
+                    + ", read=" + readTimeoutSeconds + ")");
+        }
+        this.openTimeoutSeconds = openTimeoutSeconds;
+        this.readTimeoutSeconds = readTimeoutSeconds;
         this.vaultUrl = vaultUrl;
         this.namespace = namespace == null ? null : namespace.trim();
         this.token = token;
@@ -161,7 +203,9 @@ public class DefaultVaultClient implements VaultClient {
     VaultConfig buildConfig(boolean withToken) throws VaultException {
         var config = new VaultConfig()
                 .address(vaultUrl)
-                .sslConfig(sslConfig);
+                .sslConfig(sslConfig)
+                .openTimeout(openTimeoutSeconds)
+                .readTimeout(readTimeoutSeconds);
         if (withToken) {
             config.token(token);
         }

@@ -104,6 +104,16 @@ public class Constants {
     public static final String CONFIG_VAULT_NAMESPACE = "namespace";
 
     /**
+     * Seconds to wait when connecting to Vault (optional; defaults to 10).
+     */
+    public static final String CONFIG_OPEN_TIMEOUT_SECONDS = "openTimeoutSeconds";
+
+    /**
+     * Seconds to wait for Vault to respond (optional; defaults to 30).
+     */
+    public static final String CONFIG_READ_TIMEOUT_SECONDS = "readTimeoutSeconds";
+
+    /**
      * The auth type name for AppRole authentication.
      */
     public static final String VAULT_AUTH_APP_ROLE = "appRole";

@@ -295,8 +295,35 @@ public class VaultCredentialService implements CredentialService {
                 options.token,
                 sslConfig,
                 options.engineVersion,
-                getNamespace()
+                getNamespace(),
+                getTimeoutSeconds(Constants.CONFIG_OPEN_TIMEOUT_SECONDS, DefaultVaultClient.DEFAULT_OPEN_TIMEOUT_SECONDS),
+                getTimeoutSeconds(Constants.CONFIG_READ_TIMEOUT_SECONDS, DefaultVaultClient.DEFAULT_READ_TIMEOUT_SECONDS)
         );
+    }
+
+    /**
+     * Reads an optional timeout (in seconds) from the configuration.
+     *
+     * @param key The configuration key
+     * @param defaultValue The value to use when the key is unset or blank
+     * @return The configured timeout
+     * @throws IllegalArgumentException If the value is not a positive integer
+     */
+    int getTimeoutSeconds(String key, int defaultValue) {
+        Object raw = this.config.get(key);
+        String value = raw == null ? null : raw.toString().trim();
+        if (value == null || value.isEmpty()) {
+            return defaultValue;
+        }
+        try {
+            int seconds = Integer.parseInt(value);
+            if (seconds > 0) {
+                return seconds;
+            }
+        } catch (NumberFormatException ignored) {
+            // falls through to the error below
+        }
+        throw new IllegalArgumentException(key + " must be a positive whole number of seconds, but was: " + value);
     }
 
     /**
