@@ -482,23 +482,125 @@ public class CredentialManagerTests {
         @Test
         @DisplayName("token caching works across multiple requests")
         void testTokenCachingWorksAcrossRequests() {
-            String path1 = "kv/app1/secret";
-            String path2 = "kv/app2/secret";
-            String field = "password";
+            var key = new TokenCache.TokenKey("https://vault.example.com", "approle", "role-1");
+            var otherKey = new TokenCache.TokenKey("https://vault.example.com", "approle", "role-2");
 
-            // Store tokens in cache
             TokenCache tokenCache = TokenCache.getInstance();
-            tokenCache.putToken(path1, field, "token-1", 3600);
-            tokenCache.putToken(path2, field, "token-2", 3600);
+            tokenCache.putToken(key, "token-1", 3600);
+            tokenCache.putToken(otherKey, "token-2", 3600);
 
-            // Verify tokens can be retrieved
-            Optional<String> token1 = tokenCache.getToken(path1, field);
-            Optional<String> token2 = tokenCache.getToken(path2, field);
+            Optional<String> token1 = tokenCache.getToken(key);
+            Optional<String> token2 = tokenCache.getToken(otherKey);
 
             assertTrue(token1.isPresent(), "Token 1 should be cached");
             assertTrue(token2.isPresent(), "Token 2 should be cached");
             assertEquals("token-1", token1.get());
             assertEquals("token-2", token2.get());
+        }
+    }
+
+    /**
+     * Tests that one login serves every path and field, and how auth failures are handled
+     */
+    @DisplayName("Shared Token Tests")
+    @Nested
+    class SharedTokenTests {
+        private Configuration config;
+        private MockVaultClient mockVaultClient;
+
+        @BeforeEach
+        void setUp() throws Exception {
+            config = new Configuration();
+            config.put(Constants.CONFIG_VAULT_URL, "https://vault.example.com");
+            config.put(Constants.CONFIG_AUTH_TYPE, Constants.VAULT_AUTH_APP_ROLE);
+            config.put(Constants.CONFIG_ROLE_ID, "role-1");
+            config.put(Constants.CONFIG_SECRET_ID, "secret-1");
+
+            mockVaultClient = new MockVaultClient();
+            mockVaultClient.putSecret("kv/app1/secret", new HashMap<>(Map.of("user", "u1", "password", "p1")));
+            mockVaultClient.putSecret("kv/app2/secret", new HashMap<>(Map.of("api_key", "k2")));
+
+            Field tokenField = TokenCache.class.getDeclaredField("tokenCache");
+            tokenField.setAccessible(true);
+            tokenField.set(TokenCache.getInstance(), new ConcurrentHashMap<>());
+        }
+
+        private VaultResponse read(Configuration cfg, String path, String field) throws Exception {
+            var request = new Request(cfg);
+            request.setAttributeName(path);
+            var options = new VaultOptions();
+            options.path = path;
+            options.field = field;
+            options.type = Constants.VAULT_TYPE_KV;
+            options.engineVersion = 2;
+            var service = new VaultCredentialService(cfg, new RequestWrapper(request), options, mockVaultClient);
+            return service.readVaultResponse();
+        }
+
+        @Test
+        @DisplayName("different paths and fields share a single login")
+        void testOneLoginForManyFields() throws Exception {
+            assertEquals("u1", read(config, "kv/app1/secret", "user").getSecret());
+            assertEquals("p1", read(config, "kv/app1/secret", "password").getSecret());
+            assertEquals("k2", read(config, "kv/app2/secret", "api_key").getSecret());
+
+            assertEquals(1, mockVaultClient.getLoginCount(), "All reads should reuse one token");
+        }
+
+        @Test
+        @DisplayName("a different roleId gets its own login")
+        void testDifferentRoleGetsOwnLogin() throws Exception {
+            read(config, "kv/app1/secret", "user");
+
+            var other = new Configuration();
+            other.put(Constants.CONFIG_VAULT_URL, "https://vault.example.com");
+            other.put(Constants.CONFIG_AUTH_TYPE, Constants.VAULT_AUTH_APP_ROLE);
+            other.put(Constants.CONFIG_ROLE_ID, "role-2");
+            other.put(Constants.CONFIG_SECRET_ID, "secret-2");
+            read(other, "kv/app1/secret", "user");
+
+            assertEquals(2, mockVaultClient.getLoginCount());
+        }
+
+        @Test
+        @DisplayName("a 403 on a freshly issued token does not trigger a re-login")
+        void testForbiddenFreshTokenDoesNotRelogin() throws Exception {
+            mockVaultClient.putSecret("kv/denied", new HashMap<>(Map.of("password", "x")));
+            mockVaultClient.forbidPath("kv/denied");
+
+            VaultResponse denied = read(config, "kv/denied", "password");
+
+            assertEquals(403, denied.getStatus());
+            assertEquals(1, mockVaultClient.getLoginCount(), "A policy denial must not cause another login");
+            assertEquals("u1", read(config, "kv/app1/secret", "user").getSecret());
+            assertEquals(1, mockVaultClient.getLoginCount(), "The shared token should still be cached");
+        }
+
+        @Test
+        @DisplayName("a 403 on an older cached token triggers one re-login and a retry")
+        void testForbiddenOldTokenRelogins() throws Exception {
+            read(config, "kv/app1/secret", "user");
+            Thread.sleep(5100);
+
+            mockVaultClient.rejectNextReads(1);
+            VaultResponse response = read(config, "kv/app1/secret", "password");
+
+            assertEquals("p1", response.getSecret(), "The retry with a new token should succeed");
+            assertEquals(2, mockVaultClient.getLoginCount());
+        }
+
+        @Test
+        @DisplayName("a 403 with a static token does not try to log in")
+        void testForbiddenStaticTokenDoesNotRelogin() throws Exception {
+            var staticConfig = new Configuration();
+            staticConfig.put(Constants.CONFIG_VAULT_URL, "https://vault.example.com");
+            staticConfig.put(Constants.CONFIG_TOKEN, "static");
+            mockVaultClient.forbidPath("kv/app1/secret");
+
+            VaultResponse response = read(staticConfig, "kv/app1/secret", "user");
+
+            assertEquals(403, response.getStatus());
+            assertEquals(0, mockVaultClient.getLoginCount());
         }
     }
 }

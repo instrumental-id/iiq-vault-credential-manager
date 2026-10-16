@@ -76,13 +76,12 @@ public class VaultCredentialService implements CredentialService {
     /**
      * Authenticates to Vault using the AppRole authentication method.
      * @param sslConfig The SSL configuration
-     * @param path The path to the secret
-     * @param field The field within the secret
+     * @param key The cache key the resulting token is stored under
      * @param debug Whether to enable debug logging
      * @return The authentication token
      * @throws VaultException If an error occurs during authentication
      */
-    private String authenticateAppRole(SslConfig sslConfig, String path, String field, boolean debug) throws VaultException {
+    private String authenticateAppRole(SslConfig sslConfig, TokenCache.TokenKey key, boolean debug) throws VaultException {
         String roleId = this.config.getString(CONFIG_ROLE_ID);
         String secretId = this.config.getString(CONFIG_SECRET_ID);
 
@@ -99,18 +98,17 @@ public class VaultCredentialService implements CredentialService {
 
         VaultClient client = getOrCreateVaultClient(sslConfig);
         var authResponse = client.loginByAppRole(roleId, secretId);
-        return extractAuthToken(path, field, authResponse, debug);
+        return extractAuthToken(key, authResponse, debug);
     }
 
     /**
      * Authenticates to Vault using JWT authentication method.
      * @param sslConfig The SSL configuration
-     * @param path The path to the secret
-     * @param field The field within the secret
+     * @param key The cache key the resulting token is stored under
      * @return The authentication token
      * @throws VaultException If an error occurs during authentication
      */
-    private String authenticateJWT(SslConfig sslConfig, String path, String field) throws VaultException {
+    private String authenticateJWT(SslConfig sslConfig, TokenCache.TokenKey key) throws VaultException {
         String provider = this.config.getString(CONFIG_JWT_PROVIDER);
         String role = this.config.getString(CONFIG_JWT_ROLE);
         String jwt = this.config.getString(CONFIG_JWT);
@@ -124,7 +122,7 @@ public class VaultCredentialService implements CredentialService {
             authResponse = client.loginByJwt(provider, role, jwt);
         }
 
-        return extractAuthToken(path, field, authResponse, false);
+        return extractAuthToken(key, authResponse, false);
     }
 
     /**
@@ -190,12 +188,11 @@ public class VaultCredentialService implements CredentialService {
 
     /**
      * Extracts the authentication token from the Vault response and caches it.
-     * @param path The path to the secret (so we can cache one token per secret, etc)
-     * @param field The field within the secret (so we can cache one token per secret field, etc)
+     * @param key The cache key to store the token under (Vault URL + authentication identity)
      * @param authResponse The authentication response from Vault
      * @return The extracted authentication token
      */
-    private String extractAuthToken(String path, String field, AuthResponse authResponse, boolean debug) {
+    private String extractAuthToken(TokenCache.TokenKey key, AuthResponse authResponse, boolean debug) {
         if (authResponse.getRestResponse() != null) {
             if (authResponse.getRestResponse().getStatus() > 299) {
                 String body = new String(authResponse.getRestResponse().getBody(), StandardCharsets.UTF_8);
@@ -209,15 +206,15 @@ public class VaultCredentialService implements CredentialService {
         var authToken = authResponse.getAuthClientToken();
 
         if (debug) {
-            log.info("Obtained new auth token for " + path + " " + field + ", duration: " + duration);
+            log.info("Obtained new auth token for " + key + ", duration: " + duration);
         }
 
         // WARNING: logs the live token. Documented in the README under "Trace logging".
         if (log.isTraceEnabled()) {
-            log.trace("Vault auth response for " + path + " " + field + ": token=" + authToken + ", duration=" + duration);
+            log.trace("Vault auth response for " + key + ": token=" + authToken + ", duration=" + duration);
         }
 
-        TokenCache.getInstance().putToken(path, field, authToken, duration);
+        TokenCache.getInstance().putToken(key, authToken, duration);
 
         return authToken;
     }
@@ -302,13 +299,45 @@ public class VaultCredentialService implements CredentialService {
     }
 
     /**
+     * Builds the key under which this configuration's auth token is cached: the Vault URL plus
+     * the authentication identity. A Vault token carries the policies of the identity that logged in,
+     * not of a particular secret, so one token serves every path and field read with this configuration.
+     *
+     * @return The cache key, or null if no login is involved (static token) or the auth type is missing/unsupported
+     */
+    private TokenCache.TokenKey buildTokenKey() {
+        String authType = this.config.getString(Constants.CONFIG_AUTH_TYPE);
+        if (authType == null) {
+            return null;
+        }
+
+        String url = this.config.getString(Constants.CONFIG_VAULT_URL);
+        if (authType.equalsIgnoreCase(VAULT_AUTH_APP_ROLE)) {
+            return new TokenCache.TokenKey(url, authType, this.config.getString(CONFIG_ROLE_ID));
+        } else if (authType.equalsIgnoreCase(VAULT_AUTH_JWT)) {
+            // The JWT itself is deliberately not part of the key: it may be reissued, but the identity is the same
+            String identity = this.config.getString(CONFIG_JWT_PROVIDER) + "|"
+                    + this.config.getString(CONFIG_JWT_ROLE) + "|"
+                    + this.config.getString(CONFIG_JWT_AUTH_PATH);
+            return new TokenCache.TokenKey(url, authType, identity);
+        }
+        return null;
+    }
+
+    private boolean hasStaticToken() {
+        String token = this.config.getString(Constants.CONFIG_TOKEN);
+        return token != null && !token.isEmpty();
+    }
+
+    /**
      * Gets an authentication token for Vault access.
      *
      * There are three options:
      *
      * 1. If a static token is provided in the configuration, it is used directly.
-     * 2. If a cached token exists for the given path and field, it is returned.
+     * 2. If a cached token exists for this Vault URL and authentication identity, it is returned.
      * 3. If no token is found, authentication is performed based on the configured auth type.
+     *    Concurrent callers share a single login.
      *
      * @param sslConfig The SSL configuration for the Vault client
      * @return The authentication token
@@ -320,35 +349,29 @@ public class VaultCredentialService implements CredentialService {
             return token;
         }
 
-        String path = options.path;
-        String field = options.field;
-
-        Optional<String> cachedToken = TokenCache.getInstance().getToken(path, field);
-        if (cachedToken.isPresent()) {
-            if (options.debug) {
-                log.info("Using cached token for " + path + " " + field);
-            }
-            return cachedToken.get();
-        }
-
         String authType = this.config.getString(Constants.CONFIG_AUTH_TYPE);
         if (authType == null) {
             throw new IllegalArgumentException("authType is required");
         }
 
-        if (options.debug) {
-            log.info("No cached token found for " + path + " " + field + ", performing authentication using type: " + authType);
-        }
-
-        // TODO: token renewal support
-        // TODO: other auth types
-        if (authType.equalsIgnoreCase(VAULT_AUTH_APP_ROLE)) {
-            return authenticateAppRole(sslConfig, path, field, options.debug);
-        } else if (authType.equalsIgnoreCase(VAULT_AUTH_JWT)) {
-            return authenticateJWT(sslConfig, path, field);
-        } else {
+        TokenCache.TokenKey key = buildTokenKey();
+        if (key == null) {
             throw new IllegalArgumentException("Unsupported authentication type: " + authType);
         }
+
+        return TokenCache.getInstance().getOrLoad(key, () -> {
+            if (options.debug) {
+                log.info("No cached token found for " + key + ", performing authentication using type: " + authType);
+            }
+
+            // TODO: token renewal support
+            // TODO: other auth types
+            if (authType.equalsIgnoreCase(VAULT_AUTH_APP_ROLE)) {
+                return authenticateAppRole(sslConfig, key, options.debug);
+            } else {
+                return authenticateJWT(sslConfig, key);
+            }
+        });
     }
 
     /**
@@ -380,16 +403,21 @@ public class VaultCredentialService implements CredentialService {
             response = fetchSecret(sslConfig);
 
             if (response.getStatus() == 401 || response.getStatus() == 403) {
-                // Token is expired, try to get a new token
-                if (options.debug) {
-                    log.info("Received authentication error " + response.getStatus() + " from Vault, trying to get a new token");
+                // Vault returns 403 both for an expired/invalid token and for a valid token that isn't
+                // allowed to read this path, so the status alone can't tell us. The token is shared by all
+                // paths, so only re-login (evicting it for everyone) if it's plausibly expired.
+                TokenCache.TokenKey key = hasStaticToken() ? null : buildTokenKey();
+                if (key != null && TokenCache.getInstance().shouldRetryAfterAuthFailure(key, options.token)) {
+                    if (options.debug) {
+                        log.info("Received authentication error " + response.getStatus() + " from Vault, trying to get a new token");
+                    }
+                    TokenCache.getInstance().invalidate(key, options.token);
+                    options.token = getToken(sslConfig);
+                    response = fetchSecret(sslConfig);
                 }
-                TokenCache.getInstance().invalidate(options.path, options.field, options.token);
-                options.token = getToken(sslConfig);
-                response = fetchSecret(sslConfig);
 
                 if (response.getStatus() == 401 || response.getStatus() == 403) {
-                    log.error("Authentication failed after token renewal attempt, status: " + response.getStatus());
+                    log.error("Vault denied the request (authentication failed or the token is not permitted for this path), status: " + response.getStatus());
                 }
             }
         }

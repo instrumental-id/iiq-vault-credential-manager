@@ -14,10 +14,17 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.lang.reflect.Field;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -34,6 +41,7 @@ public class CredentialCacheTests {
     @Nested
     class TokenCacheTests {
         private TokenCache tokenCache;
+        private final TokenCache.TokenKey key = new TokenCache.TokenKey("https://vault.example.com", "approle", "role-1");
 
         @BeforeEach
         void setUp() throws Exception {
@@ -56,144 +64,182 @@ public class CredentialCacheTests {
         @Test
         @DisplayName("getToken returns empty optional when token is expired")
         void testGetTokenReturnsEmptyForExpiredToken() throws Exception {
-            String path = "/vault/auth";
-            String field = "client_token";
-            String token = "expired-token";
-
             // Put a token with immediate expiration (0 seconds duration)
-            tokenCache.putToken(path, field, token, 0L);
+            tokenCache.putToken(key, "expired-token", 0L);
 
             // Wait a bit to ensure expiration time has passed
             Thread.sleep(10);
 
-            Optional<String> retrieved = tokenCache.getToken(path, field);
-            assertTrue(retrieved.isEmpty(), "Expired token should return empty optional");
+            assertTrue(tokenCache.getToken(key).isEmpty(), "Expired token should return empty optional");
         }
 
         @Test
         @DisplayName("getToken returns empty optional for non-existent token")
         void testGetTokenReturnsEmptyForNonExistent() {
-            Optional<String> retrieved = tokenCache.getToken("/non/existent", "field");
-            assertTrue(retrieved.isEmpty(), "Should return empty optional for non-existent token");
+            assertTrue(tokenCache.getToken(key).isEmpty(), "Should return empty optional for non-existent token");
         }
 
         @Test
         @DisplayName("getToken with valid future expiration returns token")
         void testGetTokenWithValidFutureExpiration() {
-            String path = "/vault/auth";
-            String field = "client_token";
-            String token = "valid-token";
-            long durationSeconds = 7200L; // 2 hours
+            tokenCache.putToken(key, "valid-token", 7200L);
 
-            tokenCache.putToken(path, field, token, durationSeconds);
-
-            Optional<String> retrieved = tokenCache.getToken(path, field);
+            Optional<String> retrieved = tokenCache.getToken(key);
             assertTrue(retrieved.isPresent(), "Non-expired token should be retrievable");
-            assertEquals(token, retrieved.get(), "Retrieved token should match stored token");
+            assertEquals("valid-token", retrieved.get(), "Retrieved token should match stored token");
         }
 
         @Test
         @DisplayName("invalidate does not fail when token does not exist")
         void testInvalidateDoesNotFailForNonExistent() {
-            // Should not throw an exception
-            assertDoesNotThrow(() ->
-                    tokenCache.invalidate("/non/existent", "field", "some-token")
-            );
+            assertDoesNotThrow(() -> tokenCache.invalidate(key, "some-token"));
         }
 
         @Test
         @DisplayName("invalidate does not remove token when existing token does not match")
         void testInvalidateDoesNotRemoveOnMismatch() {
-            String path = "/vault/auth";
-            String field = "client_token";
-            String storedToken = "stored-token";
-            String differentToken = "different-token";
+            tokenCache.putToken(key, "stored-token", 3600L);
+            tokenCache.invalidate(key, "different-token");
 
-            tokenCache.putToken(path, field, storedToken, 3600L);
-            tokenCache.invalidate(path, field, differentToken);
-
-            Optional<String> retrieved = tokenCache.getToken(path, field);
+            Optional<String> retrieved = tokenCache.getToken(key);
             assertTrue(retrieved.isPresent(), "Token should not be removed on mismatch");
-            assertEquals(storedToken, retrieved.get(), "Stored token should remain unchanged");
+            assertEquals("stored-token", retrieved.get(), "Stored token should remain unchanged");
         }
 
         @Test
         @DisplayName("invalidate removes token when existing token matches")
         void testInvalidateRemovesTokenOnMatch() {
-            String path = "/vault/auth";
-            String field = "client_token";
-            String token = "token-to-invalidate";
+            tokenCache.putToken(key, "token-to-invalidate", 3600L);
+            tokenCache.invalidate(key, "token-to-invalidate");
 
-            tokenCache.putToken(path, field, token, 3600L);
-            tokenCache.invalidate(path, field, token);
-
-            Optional<String> retrieved = tokenCache.getToken(path, field);
-            assertTrue(retrieved.isEmpty(), "Token should be removed after invalidation");
+            assertTrue(tokenCache.getToken(key).isEmpty(), "Token should be removed after invalidation");
         }
 
         @Test
-        @DisplayName("multiple tokens can be stored for different paths and fields")
-        void testMultipleTokensForDifferentPathsAndFields() {
-            tokenCache.putToken("/path1", "field1", "token1", 3600L);
-            tokenCache.putToken("/path1", "field2", "token2", 3600L);
-            tokenCache.putToken("/path2", "field1", "token3", 3600L);
+        @DisplayName("tokens are kept separately per Vault URL, auth type and identity")
+        void testTokensSeparatedByIdentity() {
+            var otherRole = new TokenCache.TokenKey("https://vault.example.com", "approle", "role-2");
+            var otherUrl = new TokenCache.TokenKey("https://other.example.com", "approle", "role-1");
+            var otherType = new TokenCache.TokenKey("https://vault.example.com", "jwt", "role-1");
 
-            assertEquals("token1", tokenCache.getToken("/path1", "field1").get());
-            assertEquals("token2", tokenCache.getToken("/path1", "field2").get());
-            assertEquals("token3", tokenCache.getToken("/path2", "field1").get());
+            tokenCache.putToken(key, "token1", 3600L);
+            tokenCache.putToken(otherRole, "token2", 3600L);
+            tokenCache.putToken(otherUrl, "token3", 3600L);
+            tokenCache.putToken(otherType, "token4", 3600L);
+
+            assertEquals("token1", tokenCache.getToken(key).get());
+            assertEquals("token2", tokenCache.getToken(otherRole).get());
+            assertEquals("token3", tokenCache.getToken(otherUrl).get());
+            assertEquals("token4", tokenCache.getToken(otherType).get());
         }
 
         @Test
-        @DisplayName("null path and field are handled correctly")
-        void testNullPathAndFieldHandling() {
-            // These should work without throwing exceptions
-            assertDoesNotThrow(() -> tokenCache.putToken(null, null, "token", 3600L));
-            assertDoesNotThrow(() -> tokenCache.getToken(null, null));
+        @DisplayName("auth type in the key is case-insensitive")
+        void testAuthTypeCaseInsensitive() {
+            tokenCache.putToken(new TokenCache.TokenKey("u", "AppRole", "r"), "token", 3600L);
+
+            assertEquals("token", tokenCache.getToken(new TokenCache.TokenKey("u", "approle", "r")).get());
+        }
+
+        @Test
+        @DisplayName("null key parts are handled correctly")
+        void testNullKeyPartsHandling() {
+            var nullKey = new TokenCache.TokenKey(null, null, null);
+            assertDoesNotThrow(() -> tokenCache.putToken(nullKey, "token", 3600L));
+            assertDoesNotThrow(() -> tokenCache.getToken(nullKey));
         }
 
         @ParameterizedTest
         @ValueSource(longs = {1L, 60L, 3600L, 86400L})
-        @DisplayName("putToken correctly calculates expiration with various durations")
-        void testPutTokenCalculatesExpirationCorrectly(long durationSeconds) {
-            String path = "/vault/auth";
-            String field = "client_token";
-            String token = "test-token";
+        @DisplayName("putToken keeps tokens usable for various durations")
+        void testPutTokenWithVariousDurations(long durationSeconds) {
+            tokenCache.putToken(key, "test-token", durationSeconds);
 
-            long beforeTime = System.currentTimeMillis();
-            tokenCache.putToken(path, field, token, durationSeconds);
-            long afterTime = System.currentTimeMillis();
-
-            Optional<String> retrieved = tokenCache.getToken(path, field);
-            assertTrue(retrieved.isPresent(), "Token should be present after storage");
-            // Token is valid (not expired), so it was stored with future expiration
-        }
-
-        @Test
-        @DisplayName("putToken stores token with correct expiration")
-        void testPutTokenStoresToken() {
-            String path = "/vault/auth";
-            String field = "client_token";
-            String token = "test-token-12345";
-            long durationSeconds = 3600L;
-
-            tokenCache.putToken(path, field, token, durationSeconds);
-
-            Optional<String> retrieved = tokenCache.getToken(path, field);
-            assertTrue(retrieved.isPresent(), "Token should be retrievable after put");
-            assertEquals(token, retrieved.get(), "Retrieved token should match stored token");
+            assertTrue(tokenCache.getToken(key).isPresent(), "Token should be present after storage");
         }
 
         @Test
         @DisplayName("token update overwrites previous token")
         void testTokenUpdateOverwritesPrevious() {
-            String path = "/vault/auth";
-            String field = "client_token";
+            tokenCache.putToken(key, "first-token", 3600L);
+            tokenCache.putToken(key, "second-token", 3600L);
 
-            tokenCache.putToken(path, field, "first-token", 3600L);
-            tokenCache.putToken(path, field, "second-token", 3600L);
+            assertEquals("second-token", tokenCache.getToken(key).get(), "Updated token should be retrieved");
+        }
 
-            Optional<String> retrieved = tokenCache.getToken(path, field);
-            assertEquals("second-token", retrieved.get(), "Updated token should be retrieved");
+        @Test
+        @DisplayName("getOrLoad logs in once and then serves the cache")
+        void testGetOrLoadLogsInOnce() throws Exception {
+            var logins = new AtomicInteger();
+            TokenCache.TokenLoader loader = () -> {
+                logins.incrementAndGet();
+                tokenCache.putToken(key, "loaded", 3600L);
+                return "loaded";
+            };
+
+            assertEquals("loaded", tokenCache.getOrLoad(key, loader));
+            assertEquals("loaded", tokenCache.getOrLoad(key, loader));
+            assertEquals(1, logins.get());
+        }
+
+        @Test
+        @DisplayName("getOrLoad lets only one of several concurrent callers log in")
+        void testGetOrLoadConcurrent() throws Exception {
+            var logins = new AtomicInteger();
+            TokenCache.TokenLoader loader = () -> {
+                logins.incrementAndGet();
+                try {
+                    Thread.sleep(50);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                tokenCache.putToken(key, "loaded", 3600L);
+                return "loaded";
+            };
+
+            int threads = 8;
+            var pool = Executors.newFixedThreadPool(threads);
+            var start = new CountDownLatch(1);
+            List<Future<String>> results = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                results.add(pool.submit(() -> {
+                    start.await();
+                    return tokenCache.getOrLoad(key, loader);
+                }));
+            }
+            start.countDown();
+            for (var f : results) {
+                assertEquals("loaded", f.get(5, TimeUnit.SECONDS));
+            }
+            pool.shutdownNow();
+
+            assertEquals(1, logins.get(), "Concurrent misses should share one login");
+        }
+
+        @Test
+        @DisplayName("shouldRetryAfterAuthFailure is false for a token that was just issued")
+        void testNoRetryForFreshToken() {
+            tokenCache.putToken(key, "fresh", 3600L);
+
+            assertFalse(tokenCache.shouldRetryAfterAuthFailure(key, "fresh"));
+        }
+
+        @Test
+        @DisplayName("shouldRetryAfterAuthFailure is true when the cached token has been replaced or is gone")
+        void testRetryWhenTokenReplacedOrMissing() {
+            assertTrue(tokenCache.shouldRetryAfterAuthFailure(key, "old"), "Nothing cached");
+
+            tokenCache.putToken(key, "newer", 3600L);
+            assertTrue(tokenCache.shouldRetryAfterAuthFailure(key, "old"), "Someone else already refreshed");
+        }
+
+        @Test
+        @DisplayName("shouldRetryAfterAuthFailure is true for an older token")
+        void testRetryForOlderToken() throws Exception {
+            tokenCache.putToken(key, "old", 3600L);
+            Thread.sleep(5100);
+
+            assertTrue(tokenCache.shouldRetryAfterAuthFailure(key, "old"));
         }
     }
 

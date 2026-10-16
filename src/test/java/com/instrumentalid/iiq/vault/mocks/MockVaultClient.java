@@ -7,7 +7,10 @@ import io.github.jopenlibs.vault.response.LogicalResponse;
 
 import java.lang.reflect.Field;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Mock implementation of VaultClient for testing. Allows mocking the various
@@ -29,6 +32,21 @@ public class MockVaultClient implements VaultClient {
      */
     private final Map<String, Map<String, Object>> secretStore;
 
+    /**
+     * Paths that respond with 403, like a valid token that the policy doesn't allow to read them
+     */
+    private final Set<String> forbiddenPaths = new HashSet<>();
+
+    /**
+     * How many logins have been performed
+     */
+    private final AtomicInteger loginCount = new AtomicInteger();
+
+    /**
+     * How many 403 responses to give regardless of path (simulates an expired token), counting down
+     */
+    private int rejectNextReads = 0;
+
     public MockVaultClient() {
         this.secretStore = new HashMap<>();
     }
@@ -41,6 +59,7 @@ public class MockVaultClient implements VaultClient {
      */
     @Override
     public AuthResponse loginByAppRole(String roleId, String secretId) {
+        loginCount.incrementAndGet();
         try {
             AuthResponse response = new AuthResponse(new TestRestResponse(200, null), 0);
             // Use reflection to set auth client token and lease duration
@@ -81,6 +100,13 @@ public class MockVaultClient implements VaultClient {
      */
     @Override
     public LogicalResponse read(String path) {
+        if (rejectNextReads > 0) {
+            rejectNextReads--;
+            return new TestLogicalResponse(new HashMap<>(), 403);
+        }
+        if (forbiddenPaths.contains(path)) {
+            return new TestLogicalResponse(new HashMap<>(), 403);
+        }
         Map<String, Object> data = secretStore.get(path);
         if (data == null) {
             throw new RuntimeException("Secret not found at path: " + path);
@@ -96,5 +122,17 @@ public class MockVaultClient implements VaultClient {
     public void setNextAuthToken(String token, long duration) {
         this.nextAuthToken = token;
         this.nextAuthDuration = duration;
+    }
+
+    public void forbidPath(String path) {
+        forbiddenPaths.add(path);
+    }
+
+    public void rejectNextReads(int count) {
+        this.rejectNextReads = count;
+    }
+
+    public int getLoginCount() {
+        return loginCount.get();
     }
 }
