@@ -103,7 +103,7 @@ These arguments tell the Credential Provider how to connect to Vault. Some of th
 - `clientKeyPemUTF8` - Client key as UTF-8 string
 
 **Other Parameters:**
-- `debug` - Enable debug logging (default: false). NOTE that this can log sensitive information.
+- `debug` - Enable debug logging (default: false). Secrets are masked. See "Debug logging" and "Trace logging" below; TRACE level logs secrets in clear text.
 
 ### CredentialAssociation
 
@@ -153,6 +153,16 @@ Currently, only AppRole authentication is supported. You will need to create an 
 
 Setting `debug` to true on either the CredentialSource or any CredentialAssociation will do more verbose logging at INFO level, which can help diagnose issues.
 
-To enable even more verbose logging, **including sensitive values**, set the logger for `com.instrumentalid.iiq.vault` to DEBUG level in your log4j configuration.
+To enable more verbose logging, set the logger for `com.instrumentalid.iiq.vault` to DEBUG level in your log4j configuration. If the logger is set to DEBUG level in addition to the `debug` flag, the configuration and request parameters are logged. Secrets are masked in these messages: values for `secretId`, `token`, `jwt`, `password`, and inline PEM settings appear as `********`, and the retrieved secret and Vault tokens are never logged at INFO or DEBUG level.
 
-If the logger is set to DEBUG level in addition to the `debug` flag, all configuration and input parameters, plus responses, will be logged. **These log messages will contain sensitive information, including AppRole authentication info and the retrieved secret.** It may be wise to route logs for this class to a separate file with restricted access. Ensure that the file is also not consumed by Splunk or other log aggregators.
+### Trace logging
+
+When Vault appears to be returning unexpected values, set the logger for `com.instrumentalid.iiq.vault` to TRACE level. This does not require the `debug` flag.
+
+**TRACE level logs secrets in clear text.** It writes:
+
+- the Vault token obtained from authentication (and its lease duration)
+- the complete raw data returned by Vault for each secret read (for database secrets, this includes every field, such as both username and password)
+- the value extracted for the requested field, which is the credential IIQ will use
+
+Only use TRACE temporarily, and turn it off when you're done. Route logs for this package to a separate file with restricted access, ensure that file is not consumed by Splunk or other log aggregators, and treat any log produced while TRACE was on as sensitive: rotate or delete it, and consider the credentials it contains compromised.

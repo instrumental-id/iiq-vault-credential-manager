@@ -6,6 +6,7 @@ import java.util.Map;
 
 import com.instrumentalid.iiq.vault.dto.VaultOptions;
 import com.instrumentalid.iiq.vault.dto.VaultResponse;
+import com.instrumentalid.iiq.vault.wrapper.LogSanitizer;
 import com.instrumentalid.iiq.vault.wrapper.RequestWrapper;
 import com.instrumentalid.iiq.vault.wrapper.Responses;
 import com.instrumentalid.iiq.vault.wrapper.VaultCredentialManagerException;
@@ -103,14 +104,14 @@ public class VaultCredentialManager implements CredentialManager {
 
             if (options.debug) {
                 Map<String, Object> requestMap = requestWrapper.getRequestMap();
-                log.info("VaultCredentialManager getCredential called with request: " + requestMap);
+                log.info("VaultCredentialManager getCredential called with request: " + LogSanitizer.mask(requestMap));
                 if (log.isDebugEnabled()) {
                     if (this.config != null) {
                         Field configMap = Configuration.class.getDeclaredField("configMap");
                         configMap.setAccessible(true);
                         @SuppressWarnings("unchecked")
                         Map<String, Object> cfgMap = (Map<String, Object>) configMap.get(this.config);
-                        log.debug("VaultCredentialManager configuration: " + cfgMap);
+                        log.debug("VaultCredentialManager configuration: " + LogSanitizer.mask(cfgMap));
                         configMap.setAccessible(false);
                     }
                     log.debug("Parsed VaultOptions: " + options);
@@ -129,11 +130,7 @@ public class VaultCredentialManager implements CredentialManager {
             Map<String, String> responseMap = new HashMap<>();
             responseMap.put(options.path, response.getSecret());
             if (options.debug) {
-                if (log.isDebugEnabled()) {
-                    log.debug("Retrieved secret for path '" + options.path + "': " + responseMap);
-                } else {
-                    log.info("Retrieved secret for path '" + options.path + "'");
-                }
+                log.info("Retrieved secret for path '" + options.path + "'");
             }
             return Responses.fromMap(responseMap);
         } catch(RuntimeException e) {

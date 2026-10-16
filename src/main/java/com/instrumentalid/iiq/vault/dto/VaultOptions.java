@@ -46,7 +46,7 @@ public class VaultOptions {
                 .add("engineVersion=" + engineVersion)
                 .add("field='" + field + "'")
                 .add("path='" + path + "'")
-                .add("token='" + token + "'")
+                .add("token=" + (token == null ? "null" : "<set>"))
                 .add("type='" + type + "'")
                 .toString();
     }

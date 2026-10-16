@@ -94,11 +94,7 @@ public class VaultCredentialService implements CredentialService {
         }
 
         if (debug) {
-            if (log.isDebugEnabled()) {
-                log.debug("Authenticating to Vault using appRole with roleId: " + roleId + " and secretId: " + secretId);
-            } else {
-                log.info("Authenticating to Vault using appRole with roleId: " + roleId);
-            }
+            log.info("Authenticating to Vault using appRole with roleId: " + roleId);
         }
 
         VaultClient client = getOrCreateVaultClient(sslConfig);
@@ -213,11 +209,12 @@ public class VaultCredentialService implements CredentialService {
         var authToken = authResponse.getAuthClientToken();
 
         if (debug) {
-            if (log.isDebugEnabled()) {
-                log.debug("Obtained new auth token for " + path + " " + field + ", token: " + authToken + ", duration: " + duration);
-            } else {
-                log.info("Obtained new auth token for " + path + " " + field);
-            }
+            log.info("Obtained new auth token for " + path + " " + field + ", duration: " + duration);
+        }
+
+        // WARNING: logs the live token. Documented in the README under "Trace logging".
+        if (log.isTraceEnabled()) {
+            log.trace("Vault auth response for " + path + " " + field + ": token=" + authToken + ", duration=" + duration);
         }
 
         TokenCache.getInstance().putToken(path, field, authToken, duration);
@@ -243,11 +240,12 @@ public class VaultCredentialService implements CredentialService {
         }
 
         if (options.debug) {
-            if (log.isDebugEnabled()) {
-                log.debug("Vault response data for path " + options.path + ": " + response.getData());
-            } else {
-                log.info("Successfully retrieved secret from Vault for path: " + options.path);
-            }
+            log.info("Successfully retrieved secret from Vault for path: " + options.path);
+        }
+
+        // WARNING: the next two trace statements log raw secret values. Documented in the README under "Trace logging".
+        if (log.isTraceEnabled()) {
+            log.trace("Raw Vault response data for path " + options.path + ": " + response.getData());
         }
 
         String value;
@@ -256,6 +254,10 @@ public class VaultCredentialService implements CredentialService {
             value = DatabaseCredentialExtractor.getInstance().extractCredential(response, options);
         } else {
             value = response.getData().get(options.field);
+        }
+
+        if (log.isTraceEnabled()) {
+            log.trace("Extracted value for path " + options.path + " field '" + options.field + "': " + value);
         }
 
         if (value == null || value.isEmpty()) {

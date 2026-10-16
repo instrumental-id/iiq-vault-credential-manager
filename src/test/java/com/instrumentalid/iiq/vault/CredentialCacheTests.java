@@ -525,6 +525,24 @@ public class CredentialCacheTests {
         }
 
         @Test
+        @DisplayName("getCachedCredential does not serve expired credentials")
+        void testGetCachedCredentialReturnsNullWhenExpired() throws Exception {
+            extractor.setCacheTimeoutSeconds(0);
+
+            VaultOptions options = new VaultOptions();
+            options.path = "/database/creds/app-role";
+            options.field = "username";
+            extractor.extractCredential(createMockResponse("username", "admin"), options);
+
+            Thread.sleep(20);
+
+            assertNull(extractor.getCachedCredential(options),
+                    "Expired credentials must be re-fetched from Vault, not served from cache");
+            // Evicted, so the next extract starts from a fresh map rather than merging into the stale one
+            assertEquals("admin2", extractor.extractCredential(createMockResponse("username", "admin2"), options));
+        }
+
+        @Test
         @DisplayName("getCachedCredential throws IllegalArgumentException for empty field")
         void testGetCachedCredentialThrowsForEmptyField() {
             VaultOptions options = new VaultOptions();
