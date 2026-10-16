@@ -12,22 +12,30 @@ public class TokenCache {
      */
     @Getter
     @EqualsAndHashCode
-    @AllArgsConstructor
     private static class TokenName {
         private final String field;
         private final String path;
+
+        TokenName(String field, String path) {
+            this.field = field;
+            this.path = path;
+        }
     }
 
     /**
      * Represents a cached token with its expiration time.
      */
     @Getter
-    @AllArgsConstructor
     @EqualsAndHashCode
     @Builder
     private static class Token {
         private final long expirationMillis;
         private final String token;
+
+        Token(long expirationMillis, String token) {
+            this.expirationMillis = expirationMillis;
+            this.token = token;
+        }
 
         public boolean isExpired() {
             return System.currentTimeMillis() > expirationMillis;
