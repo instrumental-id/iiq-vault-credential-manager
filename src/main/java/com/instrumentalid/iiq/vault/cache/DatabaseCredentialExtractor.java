@@ -125,13 +125,18 @@ public class DatabaseCredentialExtractor {
 
         ConcurrentMap<String, TimedCacheMap> cacheMap = this.cache.get();
 
-        if (cacheMap.get(path) != null) {
-            ConcurrentMap<String, Object> credentialMap = cacheMap.get(path).getData();
-            if (credentialMap.containsKey(field)) {
-                return (String) credentialMap.get(field);
-            }
+        TimedCacheMap cached = cacheMap.get(path);
+        if (cached == null) {
+            return null;
         }
-        return null;
+
+        if (cached.isExpired()) {
+            // Evict so stale credentials don't linger in the thread-local
+            cacheMap.remove(path, cached);
+            return null;
+        }
+
+        return (String) cached.getData().get(field);
     }
 
 }
