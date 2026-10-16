@@ -30,24 +30,27 @@ public class TokenCache {
     @EqualsAndHashCode
     public static final class TokenKey {
         private final String url;
+        private final String namespace;
         private final String authType;
         private final String identity;
 
         /**
          * @param url The Vault URL
+         * @param namespace The Vault namespace (null or empty for the root namespace)
          * @param authType The authentication type (case-insensitive)
          * @param identity What identifies the login: the roleId for AppRole, or provider/role/path for JWT.
          *                 Never the secret itself.
          */
-        public TokenKey(String url, String authType, String identity) {
+        public TokenKey(String url, String namespace, String authType, String identity) {
             this.url = url;
+            this.namespace = namespace == null || namespace.isEmpty() ? null : namespace;
             this.authType = authType == null ? null : authType.toLowerCase(Locale.ROOT);
             this.identity = identity;
         }
 
         @Override
         public String toString() {
-            return "TokenKey(url=" + url + ", authType=" + authType + ", identity=" + identity + ")";
+            return "TokenKey(url=" + url + ", namespace=" + namespace + ", authType=" + authType + ", identity=" + identity + ")";
         }
     }
 

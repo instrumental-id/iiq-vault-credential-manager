@@ -35,6 +35,10 @@ public class DefaultVaultClient implements VaultClient {
      */
     private final SslConfig sslConfig;
     /**
+     * The Vault namespace, or null/empty for the root namespace
+     */
+    private final String namespace;
+    /**
      * The authentication token
      */
     private final String token;
@@ -51,7 +55,20 @@ public class DefaultVaultClient implements VaultClient {
      * @param engineVersion The Vault engine version
      */
     public DefaultVaultClient(String vaultUrl, String token, SslConfig sslConfig, int engineVersion) {
+        this(vaultUrl, token, sslConfig, engineVersion, null);
+    }
+
+    /**
+     * Constructs a new DefaultVaultClient
+     * @param vaultUrl The URL of the Vault instance
+     * @param token The token to use for authentication (optional)
+     * @param sslConfig The SSL configuration
+     * @param engineVersion The Vault engine version
+     * @param namespace The Vault namespace to use for every request (optional; null or empty means root)
+     */
+    public DefaultVaultClient(String vaultUrl, String token, SslConfig sslConfig, int engineVersion, String namespace) {
         this.vaultUrl = vaultUrl;
+        this.namespace = namespace == null ? null : namespace.trim();
         this.token = token;
         this.sslConfig = sslConfig;
         this.engineVersion = engineVersion;
@@ -71,10 +88,7 @@ public class DefaultVaultClient implements VaultClient {
             log.debug("Logging in to Vault at " + vaultUrl + " using AppRole with roleId: " + roleId);
         }
 
-        var vaultConfig = new VaultConfig()
-                .address(vaultUrl)
-                .sslConfig(sslConfig)
-                .build();
+        var vaultConfig = buildConfig(false);
 
         var vault = Vault.create(vaultConfig, DEFAULT_ENGINE_VERSION);
         return vault.auth().loginByAppRole(roleId, secretId);
@@ -93,10 +107,7 @@ public class DefaultVaultClient implements VaultClient {
         if (log.isDebugEnabled()) {
             log.debug("Logging in to Vault at " + vaultUrl + " using JWT with provider: " + provider + " and role: " + role);
         }
-        var vaultConfig = new VaultConfig()
-                .address(vaultUrl)
-                .sslConfig(sslConfig)
-                .build();
+        var vaultConfig = buildConfig(false);
 
         var vault = Vault.create(vaultConfig, DEFAULT_ENGINE_VERSION);
         return vault.auth().loginByJwt(provider, role, jwt);
@@ -116,10 +127,7 @@ public class DefaultVaultClient implements VaultClient {
         if (log.isDebugEnabled()) {
             log.debug("Logging in to Vault at " + vaultUrl + " using JWT with provider: " + provider + ", role: " + role + ", and authPath: " + authPath);
         }
-        var vaultConfig = new VaultConfig()
-                .address(vaultUrl)
-                .sslConfig(sslConfig)
-                .build();
+        var vaultConfig = buildConfig(false);
 
         var vault = Vault.create(vaultConfig, DEFAULT_ENGINE_VERSION);
         return vault.auth().loginByJwt(provider, role, jwt, authPath);
@@ -137,14 +145,30 @@ public class DefaultVaultClient implements VaultClient {
             log.debug("Reading secret from Vault at " + vaultUrl + " at path: " + path);
         }
 
-        var vaultConfig = new VaultConfig()
-                .address(vaultUrl)
-                .token(token)
-                .sslConfig(sslConfig)
-                .build();
+        var vaultConfig = buildConfig(true);
 
         var vault = Vault.create(vaultConfig, engineVersion);
         return vault.logical().read(path);
     }
-}
 
+    /**
+     * Builds the driver configuration for a request. The namespace is applied only when set, because
+     * the driver rejects an empty one.
+     * @param withToken Whether to include the token (reads do, logins don't)
+     * @return The driver configuration
+     * @throws VaultException If the configuration is invalid
+     */
+    VaultConfig buildConfig(boolean withToken) throws VaultException {
+        var config = new VaultConfig()
+                .address(vaultUrl)
+                .sslConfig(sslConfig);
+        if (withToken) {
+            config.token(token);
+        }
+        // Don't call nameSpace() with an empty string: the driver throws "A namespace cannot be empty."
+        if (namespace != null && !namespace.isEmpty()) {
+            config.nameSpace(namespace);
+        }
+        return config.build();
+    }
+}

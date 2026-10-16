@@ -97,6 +97,11 @@ public class Constants {
      * The key used to identify the URL for the Vault server.
      */
     public static final String CONFIG_VAULT_URL = "url";
+    /**
+     * The key used to identify the Vault Enterprise / HCP Vault namespace (optional). Sent as the
+     * X-Vault-Namespace header on both login and reads, so the auth method and secrets must live in it.
+     */
+    public static final String CONFIG_VAULT_NAMESPACE = "namespace";
 
     /**
      * The auth type name for AppRole authentication.

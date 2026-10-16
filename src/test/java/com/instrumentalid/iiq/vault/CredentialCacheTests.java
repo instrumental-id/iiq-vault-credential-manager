@@ -41,7 +41,7 @@ public class CredentialCacheTests {
     @Nested
     class TokenCacheTests {
         private TokenCache tokenCache;
-        private final TokenCache.TokenKey key = new TokenCache.TokenKey("https://vault.example.com", "approle", "role-1");
+        private final TokenCache.TokenKey key = new TokenCache.TokenKey("https://vault.example.com", null, "approle", "role-1");
 
         @BeforeEach
         void setUp() throws Exception {
@@ -118,9 +118,9 @@ public class CredentialCacheTests {
         @Test
         @DisplayName("tokens are kept separately per Vault URL, auth type and identity")
         void testTokensSeparatedByIdentity() {
-            var otherRole = new TokenCache.TokenKey("https://vault.example.com", "approle", "role-2");
-            var otherUrl = new TokenCache.TokenKey("https://other.example.com", "approle", "role-1");
-            var otherType = new TokenCache.TokenKey("https://vault.example.com", "jwt", "role-1");
+            var otherRole = new TokenCache.TokenKey("https://vault.example.com", null, "approle", "role-2");
+            var otherUrl = new TokenCache.TokenKey("https://other.example.com", null, "approle", "role-1");
+            var otherType = new TokenCache.TokenKey("https://vault.example.com", null, "jwt", "role-1");
 
             tokenCache.putToken(key, "token1", 3600L);
             tokenCache.putToken(otherRole, "token2", 3600L);
@@ -134,17 +134,35 @@ public class CredentialCacheTests {
         }
 
         @Test
+        @DisplayName("the same identity in different namespaces gets separate tokens, and empty means root")
+        void testTokensSeparatedByNamespace() {
+            var teamA = new TokenCache.TokenKey("https://vault.example.com", "team-a", "approle", "role-1");
+            var teamB = new TokenCache.TokenKey("https://vault.example.com", "team-b", "approle", "role-1");
+
+            tokenCache.putToken(teamA, "token-a", 3600L);
+            tokenCache.putToken(teamB, "token-b", 3600L);
+            tokenCache.putToken(key, "token-root", 3600L);
+
+            assertEquals("token-a", tokenCache.getToken(teamA).get());
+            assertEquals("token-b", tokenCache.getToken(teamB).get());
+            assertEquals("token-root", tokenCache.getToken(key).get());
+            assertEquals("token-root", tokenCache.getToken(
+                    new TokenCache.TokenKey("https://vault.example.com", "", "approle", "role-1")).get(),
+                    "An empty namespace is the root namespace");
+        }
+
+        @Test
         @DisplayName("auth type in the key is case-insensitive")
         void testAuthTypeCaseInsensitive() {
-            tokenCache.putToken(new TokenCache.TokenKey("u", "AppRole", "r"), "token", 3600L);
+            tokenCache.putToken(new TokenCache.TokenKey("u", null, "AppRole", "r"), "token", 3600L);
 
-            assertEquals("token", tokenCache.getToken(new TokenCache.TokenKey("u", "approle", "r")).get());
+            assertEquals("token", tokenCache.getToken(new TokenCache.TokenKey("u", null, "approle", "r")).get());
         }
 
         @Test
         @DisplayName("null key parts are handled correctly")
         void testNullKeyPartsHandling() {
-            var nullKey = new TokenCache.TokenKey(null, null, null);
+            var nullKey = new TokenCache.TokenKey(null, null, null, null);
             assertDoesNotThrow(() -> tokenCache.putToken(nullKey, "token", 3600L));
             assertDoesNotThrow(() -> tokenCache.getToken(nullKey));
         }

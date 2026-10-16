@@ -294,7 +294,8 @@ public class VaultCredentialService implements CredentialService {
                 this.config.getString(Constants.CONFIG_VAULT_URL),
                 options.token,
                 sslConfig,
-                options.engineVersion
+                options.engineVersion,
+                getNamespace()
         );
     }
 
@@ -311,17 +312,27 @@ public class VaultCredentialService implements CredentialService {
             return null;
         }
 
+        // A role ID only means something within its namespace, so the namespace is part of the identity
         String url = this.config.getString(Constants.CONFIG_VAULT_URL);
+        String namespace = getNamespace();
         if (authType.equalsIgnoreCase(VAULT_AUTH_APP_ROLE)) {
-            return new TokenCache.TokenKey(url, authType, this.config.getString(CONFIG_ROLE_ID));
+            return new TokenCache.TokenKey(url, namespace, authType, this.config.getString(CONFIG_ROLE_ID));
         } else if (authType.equalsIgnoreCase(VAULT_AUTH_JWT)) {
             // The JWT itself is deliberately not part of the key: it may be reissued, but the identity is the same
             String identity = this.config.getString(CONFIG_JWT_PROVIDER) + "|"
                     + this.config.getString(CONFIG_JWT_ROLE) + "|"
                     + this.config.getString(CONFIG_JWT_AUTH_PATH);
-            return new TokenCache.TokenKey(url, authType, identity);
+            return new TokenCache.TokenKey(url, namespace, authType, identity);
         }
         return null;
+    }
+
+    /**
+     * @return The configured Vault namespace, or null for the root namespace
+     */
+    private String getNamespace() {
+        String namespace = this.config.getString(Constants.CONFIG_VAULT_NAMESPACE);
+        return namespace == null || namespace.trim().isEmpty() ? null : namespace.trim();
     }
 
     private boolean hasStaticToken() {

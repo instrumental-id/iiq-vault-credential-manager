@@ -482,8 +482,8 @@ public class CredentialManagerTests {
         @Test
         @DisplayName("token caching works across multiple requests")
         void testTokenCachingWorksAcrossRequests() {
-            var key = new TokenCache.TokenKey("https://vault.example.com", "approle", "role-1");
-            var otherKey = new TokenCache.TokenKey("https://vault.example.com", "approle", "role-2");
+            var key = new TokenCache.TokenKey("https://vault.example.com", null, "approle", "role-1");
+            var otherKey = new TokenCache.TokenKey("https://vault.example.com", null, "approle", "role-2");
 
             TokenCache tokenCache = TokenCache.getInstance();
             tokenCache.putToken(key, "token-1", 3600);
@@ -560,6 +560,39 @@ public class CredentialManagerTests {
             read(other, "kv/app1/secret", "user");
 
             assertEquals(2, mockVaultClient.getLoginCount());
+        }
+
+        @Test
+        @DisplayName("the same roleId in a different namespace gets its own login")
+        void testDifferentNamespaceGetsOwnLogin() throws Exception {
+            read(config, "kv/app1/secret", "user");
+
+            var namespaced = new Configuration();
+            namespaced.put(Constants.CONFIG_VAULT_URL, "https://vault.example.com");
+            namespaced.put(Constants.CONFIG_VAULT_NAMESPACE, "team-a");
+            namespaced.put(Constants.CONFIG_AUTH_TYPE, Constants.VAULT_AUTH_APP_ROLE);
+            namespaced.put(Constants.CONFIG_ROLE_ID, "role-1");
+            namespaced.put(Constants.CONFIG_SECRET_ID, "secret-1");
+            read(namespaced, "kv/app1/secret", "user");
+            read(namespaced, "kv/app2/secret", "api_key");
+
+            assertEquals(2, mockVaultClient.getLoginCount(), "One login per namespace, shared across fields");
+        }
+
+        @Test
+        @DisplayName("a blank namespace is treated as no namespace")
+        void testBlankNamespaceIsRoot() throws Exception {
+            read(config, "kv/app1/secret", "user");
+
+            var blank = new Configuration();
+            blank.put(Constants.CONFIG_VAULT_URL, "https://vault.example.com");
+            blank.put(Constants.CONFIG_VAULT_NAMESPACE, "   ");
+            blank.put(Constants.CONFIG_AUTH_TYPE, Constants.VAULT_AUTH_APP_ROLE);
+            blank.put(Constants.CONFIG_ROLE_ID, "role-1");
+            blank.put(Constants.CONFIG_SECRET_ID, "secret-1");
+            read(blank, "kv/app1/secret", "user");
+
+            assertEquals(1, mockVaultClient.getLoginCount());
         }
 
         @Test
